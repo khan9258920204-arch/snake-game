@@ -1,1 +1,746 @@
-file:///data/user/0/com.foxdebug.acodefree/files/public/my-first-app/snake.html
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body {
+    font-family: sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0;
+    padding-top: 14px;
+    min-height: 100vh;
+    color: #d1fae5;
+    background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+  }
+  canvas {
+    width: 340px;
+    height: 340px;
+    border-radius: 20px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+  #score { font-size: 20px; margin: 6px 0 8px; text-align: center; }
+  .pad { display: grid; grid-template-columns: repeat(3, 70px); gap: 8px; margin-top: 12px; }
+  button {
+    height: 70px;
+    font-size: 28px;
+    border: none;
+    border-radius: 18px;
+    color: white;
+    background: linear-gradient(135deg, #34d399, #059669);
+    touch-action: manipulation;
+  }
+  button:active { transform: scale(0.92); }
+  .row { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 14px 0 6px; }
+  .small { height: 46px; font-size: 18px; padding: 0 16px; }
+  .icon { padding: 0 12px; }
+  .modes { display: flex; gap: 8px; margin-bottom: 10px; }
+  .mode {
+    height: 44px;
+    font-size: 16px;
+    padding: 0 14px;
+    border: 3px solid transparent;
+    background: rgba(255, 255, 255, 0.15);
+  }
+  .mode.on { border-color: white; background: linear-gradient(135deg, #34d399, #059669); }
+  .colors { display: flex; gap: 14px; margin: 10px 0 24px; align-items: center; }
+  .sw { height: 40px; width: 40px; border-radius: 50%; font-size: 0; border: 3px solid transparent; padding: 0; }
+  .sw.on { border-color: white; }
+</style>
+</head>
+<body>
+  <div id="score">Level 1 • Score: 0</div>
+
+  <div class="modes">
+    <button class="mode" onclick="chooseMode('chill')">😌 Chill</button>
+    <button class="mode" onclick="chooseMode('normal')">🙂 Normal</button>
+    <button class="mode" onclick="chooseMode('hard')">🔥 Hard</button>
+  </div>
+
+  <canvas id="game" width="360" height="360" onclick="begin()"></canvas>
+
+  <div class="pad">
+    <div></div>
+    <button ontouchstart="press(event,0,-1)" onclick="press(event,0,-1)">▲</button>
+    <div></div>
+    <button ontouchstart="press(event,-1,0)" onclick="press(event,-1,0)">◀</button>
+    <button ontouchstart="press(event,0,1)" onclick="press(event,0,1)">▼</button>
+    <button ontouchstart="press(event,1,0)" onclick="press(event,1,0)">▶</button>
+  </div>
+
+  <div class="row">
+    <button id="pause" class="small" onclick="togglePause()">⏸ Pause</button>
+    <button class="small" onclick="start()">Restart</button>
+    <button id="sound" class="small icon" onclick="toggleSound()">🔊</button>
+    <button id="music" class="small icon" onclick="toggleMusic()">🎵</button>
+  </div>
+
+  <div class="colors">
+    <span>Snake:</span>
+    <button class="sw" style="background:#4ade80" onclick="setColor(0)">g</button>
+    <button class="sw" style="background:#60a5fa" onclick="setColor(1)">b</button>
+    <button class="sw" style="background:#f9a8d4" onclick="setColor(2)">p</button>
+    <button class="sw" style="background:#fdba74" onclick="setColor(3)">o</button>
+  </div>
+
+<script>
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var cells = 15, size = 24;
+
+  // ===== MODES: change these numbers to tune each mode =====
+  // startDelay: bigger = slower start    speedUpBy: faster per level
+  // fastestDelay: top speed limit        applesPerLevel: apples per level
+  // maxRocks: most rocks at once         rockEvery: steps between new rocks
+  // ghostSteps: red warning time         rockLife: steps a rock stays
+  var modes = {
+    chill: {
+      startDelay: 300, speedUpBy: 8, fastestDelay: 130, applesPerLevel: 5,
+      maxRocks: 1, rockEveryMin: 10, rockEveryMax: 18,
+      ghostSteps: 10, rockLifeMin: 20, rockLifeMax: 30
+    },
+    normal: {
+      startDelay: 260, speedUpBy: 15, fastestDelay: 90, applesPerLevel: 3,
+      maxRocks: 2, rockEveryMin: 6, rockEveryMax: 12,
+      ghostSteps: 6, rockLifeMin: 25, rockLifeMax: 40
+    },
+    hard: {
+      startDelay: 200, speedUpBy: 25, fastestDelay: 60, applesPerLevel: 3,
+      maxRocks: 4, rockEveryMin: 4, rockEveryMax: 8,
+      ghostSteps: 3, rockLifeMin: 30, rockLifeMax: 50
+    }
+  };
+  var modeName = 'normal';
+  var startDelay, speedUpBy, fastestDelay, applesPerLevel;
+  var maxRocks, rockEveryMin, rockEveryMax, ghostSteps, rockLifeMin, rockLifeMax;
+
+  // ===== GOLDEN APPLE settings =====
+  var goldenChance = 0.3;  // chance after each normal apple (0.3 = 30%)
+  var goldenLife = 28;     // how many steps it stays before vanishing
+  var goldenPoints = 5;    // points for eating it
+
+  var palette = [
+    ['#4ade80', '#22c55e'],
+    ['#60a5fa', '#3b82f6'],
+    ['#f9a8d4', '#ec4899'],
+    ['#fdba74', '#f97316']
+  ];
+  var colorIdx = 0;
+
+  var snake, prev, dir, queue, food, gold, score, level, best, rocks;
+  var running = false, paused = false, dead = false;
+  var lastTick = 0, lastT = 1, particles = [], floaters = [], timer;
+  var stepCount = 0, nextSpawn = 0, lastTouch = 0;
+
+  // ===== SOUND EFFECTS =====
+  var soundOn = true;
+  var audioCtx = null;
+
+  function getAudio() {
+    try {
+      if (!audioCtx) {
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      }
+      if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) {}
+    return audioCtx;
+  }
+
+  // One beep: pitch, length, wave type, loudness, delay
+  function tone(freq, dur, type, vol, delay) {
+    if (!soundOn) return;
+    var a = getAudio();
+    if (!a) return;
+    try {
+      var t0 = a.currentTime + (delay || 0);
+      var o = a.createOscillator();
+      var g = a.createGain();
+      o.type = type || 'sine';
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(vol || 0.08, t0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g);
+      g.connect(a.destination);
+      o.start(t0);
+      o.stop(t0 + dur + 0.02);
+    } catch (e) {}
+  }
+
+  function sfx(name) {
+    if (name === 'eat') {
+      tone(520, 0.09, 'square', 0.06, 0);
+      tone(780, 0.12, 'square', 0.06, 0.07);
+    } else if (name === 'level') {
+      tone(523, 0.12, 'triangle', 0.12, 0);
+      tone(659, 0.12, 'triangle', 0.12, 0.1);
+      tone(784, 0.12, 'triangle', 0.12, 0.2);
+      tone(1046, 0.25, 'triangle', 0.12, 0.3);
+    } else if (name === 'rock') {
+      tone(180, 0.18, 'sawtooth', 0.05, 0);
+    } else if (name === 'turn') {
+      tone(320, 0.03, 'sine', 0.04, 0);
+    } else if (name === 'die') {
+      tone(330, 0.2, 'sawtooth', 0.09, 0);
+      tone(247, 0.2, 'sawtooth', 0.09, 0.18);
+      tone(165, 0.45, 'sawtooth', 0.09, 0.36);
+    } else if (name === 'goldspawn') {
+      tone(1318, 0.08, 'sine', 0.05, 0);
+      tone(1760, 0.12, 'sine', 0.05, 0.08);
+    } else if (name === 'gold') {
+      tone(880, 0.08, 'sine', 0.1, 0);
+      tone(1175, 0.08, 'sine', 0.09, 0.07);
+      tone(1568, 0.08, 'sine', 0.09, 0.14);
+      tone(2093, 0.25, 'sine', 0.1, 0.21);
+    }
+  }
+
+  function toggleSound() {
+    soundOn = !soundOn;
+    try { localStorage.setItem('snakeSound', soundOn ? '1' : '0'); } catch (e) {}
+    document.getElementById('sound').textContent = soundOn ? '🔊' : '🔇';
+    if (soundOn) tone(660, 0.1, 'square', 0.06, 0);
+  }
+
+  // ===== BACKGROUND MUSIC =====
+  // Melody: 32 steps, numbers are pitches (0 = silence)
+  var melody = [
+    659, 0, 784, 659,  587, 0, 523, 587,
+    659, 0, 784, 880,  784, 0, 659, 0,
+    587, 0, 659, 587,  523, 0, 440, 523,
+    587, 0, 659, 784,  659, 0, 0, 0
+  ];
+  // Bass: one low note every 4 steps
+  var bass = [110, 110, 87, 87, 131, 131, 98, 98];
+
+  var musicOn = true;
+  var musicTimer = null;
+  var musicStep = 0;
+  var nextNoteTime = 0;
+
+  function note(freq, when, dur, type, vol) {
+    var o = audioCtx.createOscillator();
+    var g = audioCtx.createGain();
+    o.type = type;
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, when);
+    g.gain.linearRampToValueAtTime(vol, when + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+    o.connect(g);
+    g.connect(audioCtx.destination);
+    o.start(when);
+    o.stop(when + dur + 0.05);
+  }
+
+  function scheduleMusic() {
+    if (!audioCtx) return;
+    try {
+      while (nextNoteTime < audioCtx.currentTime + 0.25) {
+        // Music gets a little faster each level
+        var stepDur = Math.max(0.12, 0.2 - (level - 1) * 0.008);
+        var m = melody[musicStep % melody.length];
+        if (m) note(m, nextNoteTime, stepDur * 0.9, 'triangle', 0.035);
+        if (musicStep % 4 === 0) {
+          note(bass[(musicStep / 4) % bass.length], nextNoteTime, stepDur * 3.6, 'sine', 0.06);
+        }
+        musicStep++;
+        nextNoteTime += stepDur;
+      }
+    } catch (e) {}
+  }
+
+  function startMusic() {
+    if (musicTimer) return;
+    var a = getAudio();
+    if (!a) return;
+    nextNoteTime = a.currentTime + 0.05;
+    musicTimer = setInterval(scheduleMusic, 80);
+  }
+
+  function stopMusic() {
+    if (musicTimer) {
+      clearInterval(musicTimer);
+      musicTimer = null;
+    }
+  }
+
+  // Music plays only while the game is actively running
+  function syncMusic() {
+    if (musicOn && running && !paused && !dead) startMusic();
+    else stopMusic();
+  }
+
+  function toggleMusic() {
+    musicOn = !musicOn;
+    try { localStorage.setItem('snakeMusic', musicOn ? '1' : '0'); } catch (e) {}
+    document.getElementById('music').textContent = musicOn ? '🎵' : '🔕';
+    syncMusic();
+  }
+
+  // Wake up audio on any finger lift or click (needed on tablets)
+  document.addEventListener('touchend', function () { getAudio(); });
+  document.addEventListener('click', function () { getAudio(); });
+
+  function loadBest() {
+    best = 0;
+    try { best = Number(localStorage.getItem('snakeBest_' + modeName)) || 0; } catch (e) {}
+  }
+
+  function applyMode(name) {
+    modeName = name;
+    var m = modes[name];
+    startDelay = m.startDelay;
+    speedUpBy = m.speedUpBy;
+    fastestDelay = m.fastestDelay;
+    applesPerLevel = m.applesPerLevel;
+    maxRocks = m.maxRocks;
+    rockEveryMin = m.rockEveryMin;
+    rockEveryMax = m.rockEveryMax;
+    ghostSteps = m.ghostSteps;
+    rockLifeMin = m.rockLifeMin;
+    rockLifeMax = m.rockLifeMax;
+    try { localStorage.setItem('snakeMode', name); } catch (e) {}
+    loadBest();
+    var names = ['chill', 'normal', 'hard'];
+    var btns = document.querySelectorAll('.mode');
+    for (var i = 0; i < btns.length; i++) {
+      btns[i].className = 'mode' + (names[i] === name ? ' on' : '');
+    }
+  }
+
+  function chooseMode(name) {
+    applyMode(name);
+    start();
+  }
+
+  var savedMode = 'normal';
+  try {
+    colorIdx = Number(localStorage.getItem('snakeColor')) || 0;
+    savedMode = localStorage.getItem('snakeMode') || 'normal';
+    if (localStorage.getItem('snakeSound') === '0') soundOn = false;
+    if (localStorage.getItem('snakeMusic') === '0') musicOn = false;
+  } catch (e) {}
+  if (!modes[savedMode]) savedMode = 'normal';
+  applyMode(savedMode);
+  document.getElementById('sound').textContent = soundOn ? '🔊' : '🔇';
+  document.getElementById('music').textContent = musicOn ? '🎵' : '🔕';
+
+  // Instant button handling: reacts on touch, ignores the duplicate click
+  function press(e, dx, dy) {
+    if (e.type === 'touchstart') {
+      lastTouch = Date.now();
+      e.preventDefault();
+    } else if (Date.now() - lastTouch < 600) {
+      return;
+    }
+    turn(dx, dy);
+  }
+
+  function setColor(i) {
+    colorIdx = i;
+    try { localStorage.setItem('snakeColor', i); } catch (e) {}
+    updateSwatches();
+  }
+
+  function updateSwatches() {
+    var sw = document.querySelectorAll('.sw');
+    for (var i = 0; i < sw.length; i++) {
+      sw[i].className = 'sw' + (i === colorIdx ? ' on' : '');
+    }
+  }
+
+  function getDelay() {
+    return Math.max(fastestDelay, startDelay - (level - 1) * speedUpBy);
+  }
+
+  function showScore() {
+    document.getElementById('score').textContent =
+      'Level ' + level + '  •  Score: ' + score + '  •  Best: ' + best;
+  }
+
+  function randomBetween(a, b) {
+    return a + Math.floor(Math.random() * (b - a + 1));
+  }
+
+  function start() {
+    clearTimeout(timer);
+    snake = [{ x: 7, y: 7 }, { x: 6, y: 7 }, { x: 5, y: 7 }];
+    prev = snake.map(function (s) { return { x: s.x, y: s.y }; });
+    dir = { x: 1, y: 0 };
+    queue = [];
+    rocks = [];
+    gold = null;
+    stepCount = 0;
+    nextSpawn = randomBetween(rockEveryMin, rockEveryMax);
+    score = 0;
+    level = 1;
+    running = false;
+    paused = false;
+    dead = false;
+    lastT = 1;
+    musicStep = 0;
+    particles = [];
+    floaters = [];
+    document.getElementById('pause').textContent = '⏸ Pause';
+    placeFood();
+    showScore();
+    updateSwatches();
+    syncMusic();
+  }
+
+  function begin() {
+    getAudio();
+    if (!running && !dead && !paused) {
+      running = true;
+      lastTick = Date.now();
+      clearTimeout(timer);
+      timer = setTimeout(tick, getDelay());
+      syncMusic();
+    }
+  }
+
+  function togglePause() {
+    if (dead || (!running && !paused)) return;
+    if (paused) {
+      paused = false;
+      running = true;
+      lastTick = Date.now();
+      timer = setTimeout(tick, getDelay());
+    } else {
+      paused = true;
+      running = false;
+      clearTimeout(timer);
+    }
+    document.getElementById('pause').textContent = paused ? '▶ Resume' : '⏸ Pause';
+    syncMusic();
+  }
+
+  function occupied(x, y) {
+    return snake.some(function (s) { return s.x === x && s.y === y; }) ||
+           rocks.some(function (r) { return r.x === x && r.y === y; }) ||
+           (gold && gold.x === x && gold.y === y);
+  }
+
+  function placeFood() {
+    var c;
+    do {
+      c = {
+        x: Math.floor(Math.random() * cells),
+        y: Math.floor(Math.random() * cells)
+      };
+    } while (occupied(c.x, c.y));
+    food = c;
+  }
+
+  function placeGold() {
+    for (var tries = 0; tries < 100; tries++) {
+      var c = {
+        x: Math.floor(Math.random() * cells),
+        y: Math.floor(Math.random() * cells)
+      };
+      var onFood = food && food.x === c.x && food.y === c.y;
+      if (!occupied(c.x, c.y) && !onFood) {
+        c.expireAt = stepCount + goldenLife;
+        gold = c;
+        sfx('goldspawn');
+        return;
+      }
+    }
+  }
+
+  function addRock() {
+    if (rocks.length >= maxRocks) return;
+    var h = snake[0];
+    for (var tries = 0; tries < 200; tries++) {
+      var c = {
+        x: Math.floor(Math.random() * cells),
+        y: Math.floor(Math.random() * cells)
+      };
+      var dx = Math.min(Math.abs(c.x - h.x), cells - Math.abs(c.x - h.x));
+      var dy = Math.min(Math.abs(c.y - h.y), cells - Math.abs(c.y - h.y));
+      var tooClose = dx + dy < 5;
+      var onFood = food && food.x === c.x && food.y === c.y;
+      if (!occupied(c.x, c.y) && !onFood && !tooClose) {
+        c.solidAt = stepCount + ghostSteps;
+        c.expireAt = stepCount + randomBetween(rockLifeMin, rockLifeMax);
+        rocks.push(c);
+        sfx('rock');
+        return;
+      }
+    }
+  }
+
+  function turn(dx, dy) {
+    if (dead || paused) return;
+    var wasRunning = running;
+    begin();
+    var last = queue.length ? queue[queue.length - 1] : dir;
+    if (dx === last.x && dy === last.y) return;
+    if (dx === -last.x && dy === -last.y) return;
+    if (queue.length < 2) {
+      queue.push({ x: dx, y: dy });
+      sfx('turn');
+    }
+    // Move right away so the turn feels instant
+    if (running && (!wasRunning || Date.now() - lastTick > 70)) {
+      clearTimeout(timer);
+      tick();
+    }
+  }
+
+  function tick() {
+    lastTick = Date.now();
+    step();
+    if (running) timer = setTimeout(tick, getDelay());
+  }
+
+  function burst(gx, gy, color, count) {
+    for (var i = 0; i < count; i++) {
+      var a = Math.random() * Math.PI * 2;
+      particles.push({
+        x: gx * size + 12, y: gy * size + 12,
+        vx: Math.cos(a) * (1 + Math.random() * 2),
+        vy: Math.sin(a) * (1 + Math.random() * 2),
+        life: 1,
+        color: color
+      });
+    }
+  }
+
+  function step() {
+    if (queue.length) dir = queue.shift();
+    prev = snake.map(function (s) { return { x: s.x, y: s.y }; });
+
+    // Random obstacles: old ones vanish, new ones appear
+    stepCount++;
+    rocks = rocks.filter(function (r) { return stepCount < r.expireAt; });
+    if (stepCount >= nextSpawn) {
+      addRock();
+      nextSpawn = stepCount + randomBetween(rockEveryMin, rockEveryMax);
+    }
+
+    // Golden apple disappears when time runs out
+    if (gold && stepCount >= gold.expireAt) gold = null;
+
+    var head = {
+      x: (snake[0].x + dir.x + cells) % cells,
+      y: (snake[0].y + dir.y + cells) % cells
+    };
+    var eating = head.x === food.x && head.y === food.y;
+    var eatingGold = gold && head.x === gold.x && head.y === gold.y;
+    var grow = eating || eatingGold;
+    var solid = grow ? snake : snake.slice(0, -1);
+    var hitSelf = solid.some(function (s) { return s.x === head.x && s.y === head.y; });
+    var hitRock = rocks.some(function (r) {
+      return r.x === head.x && r.y === head.y && stepCount >= r.solidAt;
+    });
+
+    if (hitSelf || hitRock) {
+      dead = true;
+      running = false;
+      if (score > best) {
+        best = score;
+        try { localStorage.setItem('snakeBest_' + modeName, best); } catch (e) {}
+      }
+      sfx('die');
+      showScore();
+      syncMusic();
+      return;
+    }
+
+    snake.unshift(head);
+    if (grow) {
+      var oldLevel = level;
+      if (eatingGold) {
+        score += goldenPoints;
+        burst(gold.x, gold.y, '#fde047', 22);
+        floaters.push({ x: gold.x * size + 12, y: gold.y * size + 6, text: '+' + goldenPoints, life: 1 });
+        gold = null;
+      } else {
+        score++;
+        burst(food.x, food.y, '#fca5a5', 12);
+        placeFood();
+        if (!gold && Math.random() < goldenChance) placeGold();
+      }
+      level = Math.floor(score / applesPerLevel) + 1;
+      if (level > oldLevel) sfx('level');
+      else sfx(eatingGold ? 'gold' : 'eat');
+      try { if (navigator.vibrate) navigator.vibrate(eatingGold ? 40 : 20); } catch (e) {}
+      showScore();
+    } else {
+      snake.pop();
+    }
+  }
+
+  function circle(x, y, r, color) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function segPos(i, t) {
+    var c = snake[i];
+    var p = prev[i] || c;
+    if (Math.abs(c.x - p.x) > 1 || Math.abs(c.y - p.y) > 1) return { x: c.x, y: c.y };
+    return { x: p.x + (c.x - p.x) * t, y: p.y + (c.y - p.y) * t };
+  }
+
+  function overlay(text, sub) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, 360, 360);
+    ctx.fillStyle = 'white';
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 28px sans-serif';
+    ctx.fillText(text, 180, 170);
+    ctx.font = '18px sans-serif';
+    ctx.fillText(sub, 180, 205);
+  }
+
+  function draw() {
+    var now = Date.now();
+    var t;
+    if (running) {
+      t = Math.max(0, Math.min(1, (now - lastTick) / getDelay()));
+      lastT = t;
+    } else if (paused) {
+      t = lastT;
+    } else {
+      t = 1;
+    }
+
+    // Grass
+    for (var x = 0; x < cells; x++) {
+      for (var y = 0; y < cells; y++) {
+        ctx.fillStyle = (x + y) % 2 === 0 ? '#1f4d3a' : '#245a43';
+        ctx.fillRect(x * size, y * size, size, size);
+      }
+    }
+
+    // Rocks (red blinking = warning, gray = solid, fading = about to vanish)
+    rocks.forEach(function (r) {
+      var ghost = stepCount < r.solidAt;
+      var fading = !ghost && (r.expireAt - stepCount) < 8;
+      if (ghost) ctx.globalAlpha = 0.35 + 0.3 * Math.sin(now / 90);
+      else if (fading) ctx.globalAlpha = 0.45 + 0.4 * Math.sin(now / 90);
+      ctx.fillStyle = ghost ? '#f87171' : '#4b5563';
+      ctx.fillRect(r.x * size + 2, r.y * size + 2, size - 4, size - 4);
+      if (!ghost) {
+        ctx.fillStyle = '#9ca3af';
+        ctx.fillRect(r.x * size + 4, r.y * size + 4, size - 12, 5);
+      }
+      ctx.globalAlpha = 1;
+    });
+
+    // Apple
+    var pulse = Math.sin(now / 180) * 1.2;
+    circle(food.x * size + 12, food.y * size + 13, 8 + pulse, '#ef4444');
+    circle(food.x * size + 9, food.y * size + 9, 2.5, '#fca5a5');
+    ctx.fillStyle = '#16a34a';
+    ctx.fillRect(food.x * size + 11, food.y * size + 2, 2, 4);
+
+    // Golden apple (ring shrinks as time runs out, blinks at the end)
+    if (gold) {
+      var left = gold.expireAt - stepCount;
+      var hide = left < 8 && Math.floor(now / 120) % 2 === 0;
+      if (!hide) {
+        var gx = gold.x * size + 12, gy = gold.y * size + 12;
+        var gp = Math.sin(now / 120) * 1.5;
+        circle(gx, gy, 12 + gp, 'rgba(253, 224, 71, 0.35)');
+        circle(gx, gy + 1, 8.5, '#facc15');
+        circle(gx - 3, gy - 2, 2.5, '#fef9c3');
+        ctx.fillStyle = '#16a34a';
+        ctx.fillRect(gx - 1, gy - 10, 2, 4);
+        var frac = Math.max(0, left / goldenLife);
+        ctx.strokeStyle = '#fde047';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(gx, gy, 11, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac);
+        ctx.stroke();
+      }
+    }
+
+    // Snake
+    var n = snake.length;
+    for (var i = n - 1; i >= 0; i--) {
+      var p = segPos(i, t);
+      var r = i === 0 ? 11.5 : 10.5 - 3 * (i / n);
+      circle(p.x * size + 12, p.y * size + 12, r, palette[colorIdx][i % 2]);
+    }
+
+    // Eyes
+    var h = segPos(0, t);
+    var cx = h.x * size + 12, cy = h.y * size + 12;
+    var e1, e2;
+    if (dir.x !== 0) {
+      e1 = { x: cx + dir.x * 4, y: cy - 5 };
+      e2 = { x: cx + dir.x * 4, y: cy + 5 };
+    } else {
+      e1 = { x: cx - 5, y: cy + dir.y * 4 };
+      e2 = { x: cx + 5, y: cy + dir.y * 4 };
+    }
+    [e1, e2].forEach(function (e) {
+      circle(e.x, e.y, 3.2, 'white');
+      circle(e.x + dir.x * 1.2, e.y + dir.y * 1.2, 1.6, 'black');
+    });
+
+    // Particles
+    particles = particles.filter(function (p) { return p.life > 0; });
+    particles.forEach(function (p) {
+      if (!paused) {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 0.04;
+      }
+      ctx.globalAlpha = Math.max(0, p.life);
+      circle(p.x, p.y, 3, p.color || '#fca5a5');
+    });
+    ctx.globalAlpha = 1;
+
+    // Floating "+5" text
+    floaters = floaters.filter(function (f) { return f.life > 0; });
+    floaters.forEach(function (f) {
+      if (!paused) {
+        f.y -= 0.8;
+        f.life -= 0.025;
+      }
+      ctx.globalAlpha = Math.max(0, f.life);
+      ctx.fillStyle = '#fde047';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.fillText(f.text, f.x, f.y);
+    });
+    ctx.globalAlpha = 1;
+
+    if (dead) overlay('Game over', 'Score ' + score + ' • tap Restart');
+    else if (paused) overlay('Paused', 'Tap Resume to continue');
+    else if (!running) overlay('Ready?', 'Tap here or an arrow to start');
+  }
+
+  // Swipe anywhere to steer
+  var sx = 0, sy = 0;
+  document.addEventListener('touchstart', function (e) {
+    sx = e.touches[0].clientX;
+    sy = e.touches[0].clientY;
+  });
+  document.addEventListener('touchmove', function (e) {
+    var x = e.touches[0].clientX;
+    var y = e.touches[0].clientY;
+    var dx = x - sx, dy = y - sy;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) > 22) {
+      if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : -1, 0);
+      else turn(0, dy > 0 ? 1 : -1);
+      sx = x;
+      sy = y;
+    }
+  });
+
+  start();
+  setInterval(function () {
+    try { draw(); }
+    catch (e) { document.getElementById('score').textContent = 'Error: ' + e.message; }
+  }, 30);
+</script>
+</body>
+</html>
